@@ -1,0 +1,32 @@
+#!/bin/bash
+
+remote_host=$(git remote get-url pyoku)
+
+get_repo_name() {
+    repo_path=$(git rev-parse --show-toplevel 2>/dev/null)
+    if [ -z "$repo_path" ]; then
+        echo "Error: Not a git repository"
+        return 1
+    fi
+
+    repo_name=$(basename "$repo_path")
+    echo "$repo_name"
+}
+
+if [ "$1" = "shell" ]; then
+    container_name=$2
+    if [ -z "$container_name" ]; then
+        container_name=$(get_repo_name)
+    fi
+
+    ssh $remote_host "docker exec -it $container_name bash"
+elif [ "$1" = "logs" ]; then
+    container_name=$2
+    if [ -z "$container_name" ]; then
+        container_name=$(get_repo_name)
+    fi
+
+    ssh $remote_host "docker logs $container_name"
+else
+    echo "Invalid command. Usage: pyoku [shell|logs] [container_name]"
+fi
