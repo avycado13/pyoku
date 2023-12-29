@@ -1,3 +1,6 @@
+'''
+Piku and Dokku combined in under 350 lines of python
+'''
 import logging
 import configparser
 import os
@@ -8,6 +11,7 @@ import git
 
 # Set up logging
 logging.basicConfig(filename='deploy.log', level=logging.INFO)
+
 
 def nginx_configure(nginx, ip: str, name: list, port: int, ssl: bool):
     """
@@ -61,6 +65,7 @@ def nginx_configure(nginx, ip: str, name: list, port: int, ssl: bool):
         f"echo '{nginx_config_no_ssl}' >> /etc/nginx/conf.d/example.conf")
     nginx.exec_run("service nginx restart")
 
+
 def get_repo_name():
     """
     Get the repository name.
@@ -78,6 +83,7 @@ def get_repo_name():
         logging.error("Error: %s", e)
         return None
 
+
 def get_repo_url():
     """
     Get the repository URL.
@@ -94,6 +100,7 @@ def get_repo_url():
         logging.error("Error: %s", e)
         return None
 
+
 def clone_or_pull_repo(repo_path, repo_url):
     """
     Clone the repository if it doesn't exist, or fetch the latest changes.
@@ -107,6 +114,7 @@ def clone_or_pull_repo(repo_path, repo_url):
     else:
         repo = Repo(repo_path)
         repo.remotes.origin.pull()
+
 
 def load_config(config_path):
     """
@@ -125,6 +133,7 @@ def load_config(config_path):
     config.read(config_path)
     return config
 
+
 def check_docker_daemon():
     """
     Check if the Docker daemon is running.
@@ -138,7 +147,8 @@ def check_docker_daemon():
         return False
     return True
 
-def build_docker_image(repo_path,client):
+
+def build_docker_image(repo_path, client):
     """
     Build a Docker image from the Dockerfile in the repo.
 
@@ -150,6 +160,7 @@ def build_docker_image(repo_path,client):
     """
     image = client.images.build(path=repo_path)
     return image
+
 
 def create_network_and_nginx(client):
     """
@@ -178,6 +189,7 @@ def create_network_and_nginx(client):
         nginx.reload()
     return network, nginx
 
+
 def rename_old_containers(client, repo_name):
     """
     Rename old containers.
@@ -189,6 +201,7 @@ def rename_old_containers(client, repo_name):
     for container in client.containers.list():
         if container.image.tags[0] == repo_name:
             container.rename(repo_name + "_old")
+
 
 def run_extra_containers(client, config):
     """
@@ -210,6 +223,7 @@ def run_extra_containers(client, config):
                 for option, value in config.items(section)
             },
         )
+
 
 def start_new_container(client, image_id, config):
     """
@@ -234,6 +248,7 @@ def start_new_container(client, image_id, config):
     )
     return container
 
+
 def stop_old_containers(client, repo_name):
     """
     Stop old containers.
@@ -248,6 +263,7 @@ def stop_old_containers(client, repo_name):
                 pass
             container.stop()
 
+
 def connect_container_to_network(container, network):
     """
     Connect a container to a network.
@@ -257,6 +273,7 @@ def connect_container_to_network(container, network):
         network (docker.models.networks.Network): Network object.
     """
     network.connect(container)
+
 
 def deploy():
     """
@@ -302,8 +319,10 @@ def deploy():
 
         # Configure nginx
         nginx_configure(
-            nginx, container.attrs['NetworkSettings']['IPAddress'], config['pyoku']['domain'], int(config['pyoku']['port']),
-            True if config.getboolean('pyoku', 'ssl', fallback=False) else False
+            nginx, container.attrs['NetworkSettings']['IPAddress'], config['pyoku']['domain'], int(
+                config['pyoku']['port']),
+            config.getboolean(
+                'pyoku', 'ssl', fallback=False)
         )
 
         # Log successful deployment
@@ -316,8 +335,13 @@ def deploy():
     except Exception as e:
         logging.error('Deployment failed: %s', e)
 
+
 def main():
+    '''
+    CLI
+    '''
     deploy()
+
 
 if __name__ == '__main__':
     main()
