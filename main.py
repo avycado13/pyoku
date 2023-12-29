@@ -9,7 +9,7 @@ import git
 # Set up logging
 logging.basicConfig(filename='deploy.log', level=logging.INFO)
 
-def nginx_configure(nginx, ip: str, name: str, port: int, ssl: bool, repo_name: str):
+def nginx_configure(nginx, ip: str, name: list, port: int, ssl: bool):
     """
     Add nginx config.
 
@@ -28,6 +28,9 @@ def nginx_configure(nginx, ip: str, name: str, port: int, ssl: bool, repo_name: 
 
         location / {{
             proxy_pass http://{ip}:{port};
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         }}
     }}
     """
@@ -36,8 +39,8 @@ def nginx_configure(nginx, ip: str, name: str, port: int, ssl: bool, repo_name: 
    listen 443 ssl;
    server_name {name};
 
-   ssl_certificate {repo_name}.crt;
-   ssl_certificate_key {repo_name}.key;
+   ssl_certificate ssl.crt;
+   ssl_certificate_key ssl.key;
 
    location / {{
        proxy_pass http://http://{ip}:{port};
@@ -51,8 +54,9 @@ def nginx_configure(nginx, ip: str, name: str, port: int, ssl: bool, repo_name: 
    '''
 
     if ssl:
-        nginx.exec_run(
-        f"echo '{nginx_config_ssl}' >> /etc/nginx/conf.d/example.conf")
+        if os.path.exists('ssl.crt') and os.path.exists('ssl.key'):
+            nginx.exec_run(
+                f"echo '{nginx_config_ssl}' >> /etc/nginx/conf.d/example.conf")
     nginx.exec_run(
         f"echo '{nginx_config_no_ssl}' >> /etc/nginx/conf.d/example.conf")
     nginx.exec_run("service nginx restart")
@@ -66,7 +70,7 @@ def get_repo_name():
     """
     try:
         result = subprocess.run(
-            ['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+            ['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True, check=True)
         repo_path = result.stdout.strip()
         repo_name = repo_path.split('/')[-1]
         return repo_name
@@ -83,11 +87,11 @@ def get_repo_url():
     """
     try:
         result = subprocess.run(
-            ['git', 'remote', 'get-url', 'origin'], capture_output=True, text=True)
+            ['git', 'remote', 'get-url', 'origin'], capture_output=True, text=True, check=False)
         repo_url = result.stdout.strip()
         return repo_url
     except Exception as e:
-        print("Error: %s", e)
+        logging.error("Error: %s", e)
         return None
 
 def clone_or_pull_repo(repo_path, repo_url):
@@ -134,7 +138,7 @@ def check_docker_daemon():
         return False
     return True
 
-def build_docker_image(repo_path):
+def build_docker_image(repo_path,client):
     """
     Build a Docker image from the Dockerfile in the repo.
 
@@ -274,11 +278,11 @@ def deploy():
         if not check_docker_daemon():
             return
 
+        client = docker.from_env()
         # Build a Docker image from the Dockerfile in the repo
-        image = build_docker_image(repo_path)
+        image = build_docker_image(repo_path, client)
 
         # Create a Docker network and start an nginx container
-        client = docker.from_env()
         network, nginx = create_network_and_nginx(client)
 
         # Rename old containers
@@ -299,7 +303,7 @@ def deploy():
         # Configure nginx
         nginx_configure(
             nginx, container.attrs['NetworkSettings']['IPAddress'], config['pyoku']['domain'], int(config['pyoku']['port']),
-            True if config.getboolean('pyoku', 'ssl', fallback=False) else False, get_repo_name()
+            True if config.getboolean('pyoku', 'ssl', fallback=False) else False
         )
 
         # Log successful deployment

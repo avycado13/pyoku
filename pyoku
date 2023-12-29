@@ -21,7 +21,7 @@ if [ "$1" = "shell" ]; then
 
     ssh $remote_host "docker exec -it $container_name bash"
 elif [ "$1" = "logs" ]; then
-    container_name=$2
+    container_name=$2 + $(get_repo_name)
     if [ -z "$container_name" ]; then
         container_name=$(get_repo_name)
     fi
