@@ -67,7 +67,7 @@ def nginx_configure(nginx, ip: str, name: str, port: int, ssl: bool) -> None:
     nginx.exec_run("service nginx restart")
 
 
-def get_repo_name() -> Optional[str]:
+def get_repo_name() -> str:
     """
     Get the repository name.
 
@@ -86,10 +86,10 @@ def get_repo_name() -> Optional[str]:
         return repo_name
     except Exception as e:
         logging.error("Error: %s", e)
-        return None
+        return ""
 
 
-def get_repo_url() -> Optional[str]:
+def get_repo_url() -> str:
     """
     Get the repository URL.
 
@@ -107,7 +107,7 @@ def get_repo_url() -> Optional[str]:
         return repo_url
     except Exception as e:
         logging.error("Error: %s", e)
-        return None
+        return ""
 
 
 def clone_or_pull_repo(repo_path: str, repo_url: str) -> None:
