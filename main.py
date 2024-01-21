@@ -119,7 +119,7 @@ def clone_or_pull_repo(repo_path: str, repo_url: str) -> None:
         repo_url (str): URL of the repository.
     """
     if not os.path.exists(repo_path):
-        Repo.clone_from(repo_url)
+        Repo.clone_from(repo_url, repo_path)
     else:
         repo = Repo(repo_path)
         repo.remotes.origin.pull()
@@ -167,7 +167,7 @@ def build_docker_image(repo_path, client) -> docker.models.images.Image:
     Returns:
         docker.models.images.Image: Docker image object.
     """
-    image = client.images.build(path=repo_path)
+    image, _ = client.images.build(path=repo_path)
     return image
 
 
