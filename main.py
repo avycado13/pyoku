@@ -1,7 +1,8 @@
-'''
+"""
 Piku and Dokku combined in under 350 lines of python
-'''
+"""
 import logging
+from typing import Optional, Tuple
 import configparser
 import os
 import subprocess
@@ -10,10 +11,10 @@ from git import Repo
 import git
 
 # Set up logging
-logging.basicConfig(filename='deploy.log', level=logging.INFO)
+logging.basicConfig(filename="deploy.log", level=logging.INFO)
 
 
-def nginx_configure(nginx, ip: str, name: list, port: int, ssl: bool):
+def nginx_configure(nginx, ip: str, name: str, port: int, ssl: bool) -> None:
     """
     Add nginx config.
 
@@ -38,7 +39,7 @@ def nginx_configure(nginx, ip: str, name: list, port: int, ssl: bool):
         }}
     }}
     """
-    nginx_config_ssl = f'''
+    nginx_config_ssl = f"""
    server {{
    listen 443 ssl;
    server_name {name};
@@ -55,18 +56,18 @@ def nginx_configure(nginx, ip: str, name: list, port: int, ssl: bool):
        proxy_ssl_session_reuse on;
    }}
    }}
-   '''
+   """
 
     if ssl:
-        if os.path.exists('ssl.crt') and os.path.exists('ssl.key'):
+        if os.path.exists("ssl.crt") and os.path.exists("ssl.key"):
             nginx.exec_run(
-                f"echo '{nginx_config_ssl}' >> /etc/nginx/conf.d/example.conf")
-    nginx.exec_run(
-        f"echo '{nginx_config_no_ssl}' >> /etc/nginx/conf.d/example.conf")
+                f"echo '{nginx_config_ssl}' >> /etc/nginx/conf.d/example.conf"
+            )
+    nginx.exec_run(f"echo '{nginx_config_no_ssl}' >> /etc/nginx/conf.d/example.conf")
     nginx.exec_run("service nginx restart")
 
 
-def get_repo_name():
+def get_repo_name() -> Optional[str]:
     """
     Get the repository name.
 
@@ -75,16 +76,20 @@ def get_repo_name():
     """
     try:
         result = subprocess.run(
-            ['git', 'rev-parse', '--show-toplevel'], capture_output=True, text=True, check=True)
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
         repo_path = result.stdout.strip()
-        repo_name = repo_path.split('/')[-1]
+        repo_name = repo_path.split("/")[-1]
         return repo_name
     except Exception as e:
         logging.error("Error: %s", e)
         return None
 
 
-def get_repo_url():
+def get_repo_url() -> Optional[str]:
     """
     Get the repository URL.
 
@@ -93,7 +98,11 @@ def get_repo_url():
     """
     try:
         result = subprocess.run(
-            ['git', 'remote', 'get-url', 'origin'], capture_output=True, text=True, check=False)
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         repo_url = result.stdout.strip()
         return repo_url
     except Exception as e:
@@ -101,7 +110,7 @@ def get_repo_url():
         return None
 
 
-def clone_or_pull_repo(repo_path, repo_url):
+def clone_or_pull_repo(repo_path: str, repo_url: str) -> None:
     """
     Clone the repository if it doesn't exist, or fetch the latest changes.
 
@@ -116,7 +125,7 @@ def clone_or_pull_repo(repo_path, repo_url):
         repo.remotes.origin.pull()
 
 
-def load_config(config_path):
+def load_config(config_path: str) -> Optional[configparser.ConfigParser]:
     """
     Load the config file.
 
@@ -127,14 +136,14 @@ def load_config(config_path):
         configparser.ConfigParser: Config object.
     """
     if not os.path.exists(config_path):
-        logging.error('Config file not found')
+        logging.error("Config file not found")
         return None
     config = configparser.ConfigParser()
     config.read(config_path)
     return config
 
 
-def check_docker_daemon():
+def check_docker_daemon() -> bool:
     """
     Check if the Docker daemon is running.
 
@@ -143,12 +152,12 @@ def check_docker_daemon():
     """
     client = docker.from_env()
     if not client.ping():
-        logging.error('Docker daemon is not running')
+        logging.error("Docker daemon is not running")
         return False
     return True
 
 
-def build_docker_image(repo_path, client):
+def build_docker_image(repo_path, client) -> docker.models.images.Image:
     """
     Build a Docker image from the Dockerfile in the repo.
 
@@ -162,7 +171,7 @@ def build_docker_image(repo_path, client):
     return image
 
 
-def create_network_and_nginx(client):
+def create_network_and_nginx(client) -> Tuple:
     """
     Create a Docker network and start an nginx container.
 
@@ -172,16 +181,13 @@ def create_network_and_nginx(client):
     Returns:
         tuple: Network and nginx container objects.
     """
-    network = client.networks.get('main')
+    network = client.networks.get("main")
     if network:
         pass
     else:
-        network = client.networks.create('main')
+        network = client.networks.create("main")
         nginx = client.containers.create(
-            image='nginx:latest',
-            ports={'80/tcp': 8080,
-                   '443/tcp': 8443},
-            detach=True
+            image="nginx:latest", ports={"80/tcp": 8080, "443/tcp": 8443}, detach=True
         )
         nginx.start()
 
@@ -203,7 +209,7 @@ def rename_old_containers(client, repo_name):
             container.rename(repo_name + "_old")
 
 
-def run_extra_containers(client, config):
+def run_extra_containers(client, config) -> None:
     """
     Run extra containers specified in the config.
 
@@ -211,21 +217,22 @@ def run_extra_containers(client, config):
         client (docker.client.DockerClient): Docker client object.
         config (configparser.ConfigParser): Config object.
     """
-    for extra in config['pyoku']['extras']:
-        keep = config.getboolean(extra, 'keep', fallback=False)
+    for extra in config["pyoku"]["extras"]:
+        keep = config.getboolean(extra, "keep", fallback=False)
         client.containers.run(
             extra,
             detach=True,
             name=extra + "_" + get_repo_name() + "_keep" if keep else "",
             environment={
                 option: value
-                for section in config.sections() if section == extra
+                for section in config.sections()
+                if section == extra
                 for option, value in config.items(section)
             },
         )
 
 
-def start_new_container(client, image_id, config):
+def start_new_container(client, image_id, config) -> docker.models.containers.Container:
     """
     Start a new container with the new image.
 
@@ -244,12 +251,12 @@ def start_new_container(client, image_id, config):
             option: value
             for section in config.sections()
             for option, value in config.items(section)
-        }
+        },
     )
     return container
 
 
-def stop_old_containers(client, repo_name):
+def stop_old_containers(client, repo_name) -> None:
     """
     Stop old containers.
 
@@ -258,13 +265,16 @@ def stop_old_containers(client, repo_name):
         repo_name (str): Name of the repository.
     """
     for container in client.containers.list():
-        if container.image.tags[0] == repo_name + "_old" or repo_name in container.image.tags[0]:
-            if '_keep' in container.image.tags[0]:
+        if (
+            container.image.tags[0] == repo_name + "_old"
+            or repo_name in container.image.tags[0]
+        ):
+            if "_keep" in container.image.tags[0]:
                 pass
             container.stop()
 
 
-def connect_container_to_network(container, network):
+def connect_container_to_network(container, network) -> None:
     """
     Connect a container to a network.
 
@@ -275,19 +285,19 @@ def connect_container_to_network(container, network):
     network.connect(container)
 
 
-def deploy():
+def deploy() -> None:
     """
     Deploy the application.
     """
     try:
         # Check if the config file exists
-        config_path = 'pyoku.ini'
+        config_path = "pyoku.ini"
         config = load_config(config_path)
         if not config:
             return
 
         # Clone the repository if it doesn't exist, or fetch the latest changes
-        repo_path = '/' + get_repo_name()
+        repo_path = "/" + get_repo_name()
         repo_url = get_repo_url()
         clone_or_pull_repo(repo_path, repo_url)
 
@@ -319,29 +329,30 @@ def deploy():
 
         # Configure nginx
         nginx_configure(
-            nginx, container.attrs['NetworkSettings']['IPAddress'], config['pyoku']['domain'], int(
-                config['pyoku']['port']),
-            config.getboolean(
-                'pyoku', 'ssl', fallback=False)
+            nginx,
+            container.attrs["NetworkSettings"]["IPAddress"],
+            config["pyoku"]["domain"],
+            int(config["pyoku"]["port"]),
+            config.getboolean("pyoku", "ssl", fallback=False),
         )
 
         # Log successful deployment
-        logging.info('Deployment successful')
+        logging.info("Deployment successful")
 
     except git.exc.GitCommandError as e:
-        logging.error('Git command error: %s', e)
+        logging.error("Git command error: %s", e)
     except docker.errors.APIError as e:
-        logging.error('Docker API error: %s', e)
+        logging.error("Docker API error: %s", e)
     except Exception as e:
-        logging.error('Deployment failed: %s', e)
+        logging.error("Deployment failed: %s", e)
 
 
-def main():
-    '''
+def main() -> None:
+    """
     CLI
-    '''
+    """
     deploy()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
