@@ -5,8 +5,10 @@ import logging
 from typing import Optional, Tuple
 import configparser
 import os
+import tempfile
 import subprocess
 import docker
+import traceback
 from stat import S_IXUSR, S_IRUSR, S_IWUSR
 from git import Repo
 import git
@@ -395,6 +397,30 @@ def cmd_git_upload_pack(app):
         cwd=GIT_ROOT,
         shell=True,
     )
+@click.command("setup:ssh")
+@click.argument('public_key_file')
+def cmd_setup_ssh(public_key_file):
+    """Set up a new SSH key (use - for stdin)"""
+
+    def add_helper(key_file):
+        if os.path.exists(key_file):
+            try:
+                fingerprint = str(subprocess.check_output('ssh-keygen -lf ' + key_file, shell=True)).split(' ', 4)[1]
+                key = open(key_file, 'r').read().strip()
+                click.echo("Adding key '{}'.".format(fingerprint), fg='white')
+                setup_authorized_keys(fingerprint, PIKU_SCRIPT, key)
+            except Exception:
+                click.echo("Error: invalid public key file '{}': {}".format(key_file, traceback.format_exc()), fg='red')
+        elif public_key_file == '-':
+            buffer = "".join(sys.stdin.readlines())
+            with tempfile.NamedTemporaryFile(mode="w") as f:
+                f.write(buffer)
+                f.flush()
+                add_helper(f.name)
+        else:
+            echo("Error: public key file '{}' not found.".format(key_file), fg='red')
+
+    add_helper(public_key_file)
 
 
 def deploy(app: str, newrev=None) -> None:
