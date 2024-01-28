@@ -7,7 +7,7 @@ import configparser
 import os
 import subprocess
 import docker
-from stat import S_IXUSR
+from stat import S_IXUSR, S_IRUSR, S_IWUSR
 from git import Repo
 import git
 import click
@@ -23,9 +23,7 @@ APP_ROOT = os.path.abspath(os.path.join(PIKU_ROOT, "apps"))
 DATA_ROOT = os.path.abspath(os.path.join(PIKU_ROOT, "data"))
 ENV_ROOT = os.path.abspath(os.path.join(PIKU_ROOT, "envs"))
 GIT_ROOT = os.path.abspath(os.path.join(PIKU_ROOT, "repos"))
-ACME_ROOT = os.environ.get("ACME_ROOT", os.path.join(os.environ["HOME"], ".acme.sh"))
-ACME_WWW = os.path.abspath(os.path.join(PIKU_ROOT, "acme"))
-ACME_ROOT_CA = os.environ.get("ACME_ROOT_CA", "letsencrypt.org")
+
 
 # Set up logging
 logging.basicConfig(filename="deploy.log", level=logging.INFO)
@@ -258,6 +256,23 @@ def run_extra_containers(client, config) -> None:
                 for option, value in config.items(section)
             },
         )
+
+
+def setup_authorized_keys(ssh_fingerprint, script_path, pubkey):
+    """Sets up an authorized_keys file to redirect SSH commands"""
+
+    authorized_keys = os.path.join(os.environ["HOME"], ".ssh", "authorized_keys")
+    if not os.path.exists(os.path.dirname(authorized_keys)):
+        os.makedirs(os.path.dirname(authorized_keys))
+    # Restrict features and force all SSH commands to go through our script
+    with open(authorized_keys, "a") as h:
+        h.write(
+            """command="FINGERPRINT={ssh_fingerprint:s} NAME=default {script_path:s} $SSH_ORIGINAL_COMMAND",no-agent-forwarding,no-user-rc,no-X11-forwarding,no-port-forwarding {pubkey:s}\n""".format(
+                **locals()
+            )
+        )
+    os.chmod(os.path.dirname(authorized_keys), S_IRUSR | S_IWUSR | S_IXUSR)
+    os.chmod(authorized_keys, S_IRUSR | S_IWUSR)
 
 
 def start_new_container(client, image_id, config) -> docker.models.containers.Container:
