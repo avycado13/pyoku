@@ -367,32 +367,48 @@ cat | PIKU_ROOT="{PIKU_ROOT:s}" {PIKU_SCRIPT:s} git-hook {app:s}""".format(**env
     )
 
 
-def deploy(app: str, newrev = None) -> None:
+@click.command("git-upload-pack")
+@click.argument("app")
+def cmd_git_upload_pack(app):
+    """INTERNAL: Handle git upload pack for an app"""
+    app = sanitize_app_name(app)
+    env = globals()
+    env.update(locals())
+    # Handle the actual receive. We'll be called with 'git-hook' after it happens
+    subprocess.call(
+        'git-shell -c "{}" '.format(sys.argv[1] + " '{}'".format(app)),
+        cwd=GIT_ROOT,
+        shell=True,
+    )
+
+
+def deploy(app: str, newrev=None) -> None:
     """
     Deploy the application.
     """
     try:
-
         # Clone the repository if it doesn't exist, or fetch the latest changes
         repo_path = os.path.join(APP_ROOT, app)
-        env = {'GIT_WORK_DIR': repo_path}
-        click.echo("-----> Deploying app '{}'".format(app), fg='green')
-        subprocess.call('git fetch --quiet', cwd=repo_path, env=env, shell=True)
-        
+        env = {"GIT_WORK_DIR": repo_path}
+        click.echo("-----> Deploying app '{}'".format(app), fg="green")
+        subprocess.call("git fetch --quiet", cwd=repo_path, env=env, shell=True)
+
         if newrev:
-            subprocess.call('git reset --hard {}'.format(newrev), cwd=repo_path, env=env, shell=True)
-        subprocess.call('git submodule init', cwd=repo_path, env=env, shell=True)
-        subprocess.call('git submodule update', cwd=repo_path, env=env, shell=True)
+            subprocess.call(
+                "git reset --hard {}".format(newrev), cwd=repo_path, env=env, shell=True
+            )
+        subprocess.call("git submodule init", cwd=repo_path, env=env, shell=True)
+        subprocess.call("git submodule update", cwd=repo_path, env=env, shell=True)
         # Check if the config file exists
-        config_path = os.path.join(repo_path,"pyoku.ini")
+        config_path = os.path.join(repo_path, "pyoku.ini")
         config = load_config(config_path)
         if not config:
             return
-        
+
         # Check if the Docker daemon is running
         if not check_docker_daemon():
             return
-        
+
         client = docker.from_env()
         # Build a Docker image from the Dockerfile in the repo
         image = build_docker_image(repo_path, client)
@@ -433,4 +449,3 @@ def deploy(app: str, newrev = None) -> None:
         click.echo("Docker API error: %s", e)
     except Exception as e:
         click.echo("Deployment failed: %s", e)
-
