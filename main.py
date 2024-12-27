@@ -5,13 +5,41 @@ import logging
 from typing import Optional, Tuple
 import configparser
 import os
+import tempfile
 import subprocess
 import docker
+import traceback
+from stat import S_IXUSR, S_IRUSR, S_IWUSR
 from git import Repo
 import git
+import click
+import sys
+
+# Vars
+PIKU_RAW_SOURCE_URL = "https://raw.githubusercontent.com/piku/piku/master/piku.py"
+PIKU_ROOT = os.environ.get("PIKU_ROOT", os.path.join(os.environ["HOME"], ".piku"))
+PIKU_BIN = os.path.join(os.environ["HOME"], "bin")
+PIKU_SCRIPT = os.path.realpath(__file__)
+PIKU_PLUGIN_ROOT = os.path.abspath(os.path.join(PIKU_ROOT, "plugins"))
+APP_ROOT = os.path.abspath(os.path.join(PIKU_ROOT, "apps"))
+DATA_ROOT = os.path.abspath(os.path.join(PIKU_ROOT, "data"))
+ENV_ROOT = os.path.abspath(os.path.join(PIKU_ROOT, "envs"))
+GIT_ROOT = os.path.abspath(os.path.join(PIKU_ROOT, "repos"))
+
 
 # Set up logging
 logging.basicConfig(filename="deploy.log", level=logging.INFO)
+
+
+def sanitize_app_name(app):
+    """Sanitize the app name and build matching path"""
+
+    app = (
+        "".join(c for c in app if c.isalnum() or c in (".", "_", "-"))
+        .rstrip()
+        .lstrip("/")
+    )
+    return app
 
 
 def nginx_configure(nginx, ip: str, name: str, port: int, ssl: bool) -> None:
@@ -232,6 +260,23 @@ def run_extra_containers(client, config) -> None:
         )
 
 
+def setup_authorized_keys(ssh_fingerprint, script_path, pubkey):
+    """Sets up an authorized_keys file to redirect SSH commands"""
+
+    authorized_keys = os.path.join(os.environ["HOME"], ".ssh", "authorized_keys")
+    if not os.path.exists(os.path.dirname(authorized_keys)):
+        os.makedirs(os.path.dirname(authorized_keys))
+    # Restrict features and force all SSH commands to go through our script
+    with open(authorized_keys, "a") as h:
+        h.write(
+            """command="FINGERPRINT={ssh_fingerprint:s} NAME=default {script_path:s} $SSH_ORIGINAL_COMMAND",no-agent-forwarding,no-user-rc,no-X11-forwarding,no-port-forwarding {pubkey:s}\n""".format(
+                **locals()
+            )
+        )
+    os.chmod(os.path.dirname(authorized_keys), S_IRUSR | S_IWUSR | S_IXUSR)
+    os.chmod(authorized_keys, S_IRUSR | S_IWUSR)
+
+
 def start_new_container(client, image_id, config) -> docker.models.containers.Container:
     """
     Start a new container with the new image.
@@ -285,21 +330,121 @@ def connect_container_to_network(container, network) -> None:
     network.connect(container)
 
 
-def deploy() -> None:
+@click.command("git-hook")
+@click.argument("app")
+def cmd_git_hook(app):
+    """INTERNAL: Post-receive git hook"""
+
+    app = sanitize_app_name(app)
+    repo_path = os.path.join(GIT_ROOT, app)
+    app_path = os.path.join(APP_ROOT, app)
+    data_path = os.path.join(DATA_ROOT, app)
+
+    for line in sys.stdin:
+        # pylint: disable=unused-variable
+        oldrev, newrev, refname = line.strip().split(" ")
+        # Handle pushes
+        if not os.path.exists(app_path):
+            click.echo("-----> Creating app '{}'".format(app), fg="green")
+            os.makedirs(app_path)
+            # The data directory may already exist, since this may be a full redeployment (we never delete data since it may be expensive to recreate)
+            if not os.path.exists(data_path):
+                os.makedirs(data_path)
+            clone_or_pull_repo(app, repo_path)
+        deploy(app, newrev=newrev)
+
+
+@click.command("git-receive-pack")
+@click.argument("app")
+def cmd_git_receive_pack(app):
+    """INTERNAL: Handle git pushes for an app"""
+
+    app = sanitize_app_name(app)
+    hook_path = os.path.join(GIT_ROOT, app, "hooks", "post-receive")
+    env = globals()
+    env.update(locals())
+
+    if not os.exists(hook_path):
+        os.makedirs(os.dirname(hook_path))
+        # Initialize the repository with a hook to this script
+        subprocess.call("git init --quiet --bare " + app, cwd=GIT_ROOT, shell=True)
+        with open(hook_path, "w") as h:
+            h.write(
+                """#!/usr/bin/env bash
+set -e; set -o pipefail;
+cat | PIKU_ROOT="{PIKU_ROOT:s}" {PIKU_SCRIPT:s} git-hook {app:s}""".format(**env)
+            )
+        # Make the hook executable by our user
+        os.chmod(hook_path, os.stat(hook_path).st_mode | S_IXUSR)
+    # Handle the actual receive. We'll be called with 'git-hook' after it happens
+    subprocess.call(
+        'git-shell -c "{}" '.format(sys.argv[1] + " '{}'".format(app)),
+        cwd=GIT_ROOT,
+        shell=True,
+    )
+
+
+@click.command("git-upload-pack")
+@click.argument("app")
+def cmd_git_upload_pack(app):
+    """INTERNAL: Handle git upload pack for an app"""
+    app = sanitize_app_name(app)
+    env = globals()
+    env.update(locals())
+    # Handle the actual receive. We'll be called with 'git-hook' after it happens
+    subprocess.call(
+        'git-shell -c "{}" '.format(sys.argv[1] + " '{}'".format(app)),
+        cwd=GIT_ROOT,
+        shell=True,
+    )
+@click.command("setup:ssh")
+@click.argument('public_key_file')
+def cmd_setup_ssh(public_key_file):
+    """Set up a new SSH key (use - for stdin)"""
+
+    def add_helper(key_file):
+        if os.path.exists(key_file):
+            try:
+                fingerprint = str(subprocess.check_output('ssh-keygen -lf ' + key_file, shell=True)).split(' ', 4)[1]
+                key = open(key_file, 'r').read().strip()
+                click.echo("Adding key '{}'.".format(fingerprint), fg='white')
+                setup_authorized_keys(fingerprint, PIKU_SCRIPT, key)
+            except Exception:
+                click.echo("Error: invalid public key file '{}': {}".format(key_file, traceback.format_exc()), fg='red')
+        elif public_key_file == '-':
+            buffer = "".join(sys.stdin.readlines())
+            with tempfile.NamedTemporaryFile(mode="w") as f:
+                f.write(buffer)
+                f.flush()
+                add_helper(f.name)
+        else:
+            echo("Error: public key file '{}' not found.".format(key_file), fg='red')
+
+    add_helper(public_key_file)
+
+
+def deploy(app: str, newrev=None) -> None:
     """
     Deploy the application.
     """
     try:
+        # Clone the repository if it doesn't exist, or fetch the latest changes
+        repo_path = os.path.join(APP_ROOT, app)
+        env = {"GIT_WORK_DIR": repo_path}
+        click.echo("-----> Deploying app '{}'".format(app), fg="green")
+        subprocess.call("git fetch --quiet", cwd=repo_path, env=env, shell=True)
+
+        if newrev:
+            subprocess.call(
+                "git reset --hard {}".format(newrev), cwd=repo_path, env=env, shell=True
+            )
+        subprocess.call("git submodule init", cwd=repo_path, env=env, shell=True)
+        subprocess.call("git submodule update", cwd=repo_path, env=env, shell=True)
         # Check if the config file exists
-        config_path = "pyoku.ini"
+        config_path = os.path.join(repo_path, "pyoku.ini")
         config = load_config(config_path)
         if not config:
             return
-
-        # Clone the repository if it doesn't exist, or fetch the latest changes
-        repo_path = "/" + get_repo_name()
-        repo_url = get_repo_url()
-        clone_or_pull_repo(repo_path, repo_url)
 
         # Check if the Docker daemon is running
         if not check_docker_daemon():
@@ -337,22 +482,11 @@ def deploy() -> None:
         )
 
         # Log successful deployment
-        logging.info("Deployment successful")
+        click.echo("Deployment successful")
 
     except git.exc.GitCommandError as e:
-        logging.error("Git command error: %s", e)
+        click.echo("Git command error: %s", e)
     except docker.errors.APIError as e:
-        logging.error("Docker API error: %s", e)
+        click.echo("Docker API error: %s", e)
     except Exception as e:
-        logging.error("Deployment failed: %s", e)
-
-
-def main() -> None:
-    """
-    CLI
-    """
-    deploy()
-
-
-if __name__ == "__main__":
-    main()
+        click.echo("Deployment failed: %s", e)
